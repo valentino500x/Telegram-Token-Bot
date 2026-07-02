@@ -41,6 +41,7 @@ class SymbolState:
     last_signal: strategy.Signal | None = None
     paper: PaperPosition | None = None
     filters: dict | None = field(default=None)
+    disabled_until: float = 0.0  # mercato sospeso fino a questo timestamp
 
 
 class TradingEngine:
@@ -120,6 +121,15 @@ class TradingEngine:
             self._task = None
 
     def _setup_symbols(self):
+        # Il motore ragiona in One-way Mode: una sola posizione per mercato
+        try:
+            self.client.set_position_mode(dual=False)
+        except AsterAPIError as e:
+            raise AsterAPIError(
+                e.status, e.code,
+                "impossibile impostare la One-way Mode sul conto "
+                f"({e.msg}) — se hai posizioni Hedge aperte su Aster, "
+                "chiudile dal sito e rilancia /run") from e
         for symbol in self.cfg.symbols:
             self.client.set_margin_type(symbol, self.cfg.margin_type)
             self.client.set_leverage(symbol, self.cfg.leverage)
@@ -162,6 +172,8 @@ class TradingEngine:
 
     async def tick_symbol(self, symbol: str):
         state = self._state(symbol)
+        if state.disabled_until and time.time() < state.disabled_until:
+            return
         raw = await asyncio.to_thread(
             self.client.klines, symbol, self.cfg.interval,
             max(self.cfg.ema_slow * 4, 120))
@@ -295,8 +307,18 @@ class TradingEngine:
         sl_str = self._round_step(sl, filters["tickSize"])
         tp_str = self._round_step(tp, filters["tickSize"])
 
-        order = await asyncio.to_thread(
-            self.client.market_order, symbol, side, qty_str)
+        try:
+            order = await asyncio.to_thread(
+                self.client.market_order, symbol, side, qty_str)
+        except AsterAPIError as e:
+            # Errori strutturali del mercato (es. tetto nozionale raggiunto,
+            # simbolo in reduce-only): inutile riprovare a ogni giro
+            if e.code in (-5018, -1121, -4131):
+                state.disabled_until = time.time() + 4 * 3600
+                await self.notify(f"⏸ {symbol}: mercato sospeso per 4 ore — "
+                                  f"{e.msg} (codice {e.code})")
+                return
+            raise
         try:
             await asyncio.to_thread(
                 self.client.stop_market_close, symbol, exit_side, sl_str)

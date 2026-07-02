@@ -218,6 +218,16 @@ class AsterClient:
             params["startTime"] = start_time
         return self._signed("GET", "/fapi/v3/income", params)
 
+    def set_position_mode(self, dual: bool):
+        """One-way (false) oppure Hedge (true). Ignora 'gia' impostato'."""
+        try:
+            return self._signed("POST", "/fapi/v3/positionSide/dual",
+                                {"dualSidePosition": "true" if dual else "false"})
+        except AsterAPIError as e:
+            if e.code == -4059:  # "No need to change position side."
+                return {}
+            raise
+
     def set_leverage(self, symbol: str, leverage: int):
         return self._signed("POST", "/fapi/v3/leverage",
                             {"symbol": symbol, "leverage": leverage})
