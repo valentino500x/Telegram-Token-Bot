@@ -45,6 +45,8 @@ class TradingEngine:
         self.last_signal: strategy.Signal | None = None
         self.paper: PaperPosition | None = None
         self.paper_realized_pnl = 0.0
+        self._last_error_msg: str | None = None
+        self._last_error_time = 0.0
 
     # ------------------------------------------------------------- lifecycle
 
@@ -80,10 +82,22 @@ class TradingEngine:
                 return
             except AsterAPIError as e:
                 log.warning("Errore API Aster: %s", e)
-                await self.notify(f"⚠️ Errore API Aster: {e.msg} (codice {e.code})")
-            except Exception:
+                msg = f"⚠️ Errore API Aster: {e.msg}"
+                if e.code:
+                    msg += f" (codice {e.code})"
+                await self._notify_error(msg)
+            except Exception as e:
                 log.exception("Errore nel ciclo di trading")
+                await self._notify_error(f"⚠️ Errore nel ciclo di trading: {e}")
             await asyncio.sleep(self.cfg.loop_seconds)
+
+    async def _notify_error(self, msg: str):
+        """Notifica un errore su Telegram, ma non ripete lo stesso per 10 minuti."""
+        now = time.time()
+        if msg != self._last_error_msg or now - self._last_error_time > 600:
+            await self.notify(msg)
+        self._last_error_msg = msg
+        self._last_error_time = now
 
     # ------------------------------------------------------------------ tick
 

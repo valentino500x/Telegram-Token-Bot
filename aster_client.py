@@ -48,9 +48,15 @@ _TYPED_DATA_TEMPLATE = {
     "message": {"msg": ""},
 }
 
+# Host alternativi per l'API V3: se uno risponde 403 (WAF) si prova l'altro
+FALLBACK_HOSTS = ("https://fapi.asterdex.com", "https://fapi3.asterdex.com")
+
+# User-Agent da browser: il firewall di Aster a volte blocca gli UA "da script"
 _HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded",
-    "User-Agent": "TelegramTokenBot/1.0",
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
+    "Accept": "*/*",
 }
 
 
@@ -72,6 +78,7 @@ class AsterClient:
         self._session = requests.Session()
         self._nonce_lock = threading.Lock()
         self._last_nonce = 0
+        self._hosts = [self.base_url] + [h for h in FALLBACK_HOSTS if h != self.base_url]
 
     # ------------------------------------------------------------------ utils
 
@@ -105,34 +112,60 @@ class AsterClient:
         try:
             data = res.json()
         except ValueError:
-            res.raise_for_status()
-            raise AsterAPIError(res.status_code, None, res.text[:200])
+            hint = ""
+            if res.status_code == 403:
+                hint = (" — accesso bloccato dal firewall di Aster (WAF): possibile "
+                        "restrizione geografica o di rete, prova un'altra rete o una VPN")
+            text = res.text.strip()[:150] or res.reason or "risposta non valida"
+            raise AsterAPIError(res.status_code, None, text + hint)
         if isinstance(data, dict) and data.get("code", 0) not in (0, 200, None) and "msg" in data:
             raise AsterAPIError(res.status_code, data.get("code"), data.get("msg", ""))
         if res.status_code >= 400:
             raise AsterAPIError(res.status_code, None, str(data)[:200])
         return data
 
+    def _request(self, method: str, path: str, query: str | None = None,
+                 params: dict | None = None):
+        """Esegue la richiesta provando gli host alternativi se uno e' bloccato."""
+        last_exc: Exception | None = None
+        for i, host in enumerate(self._hosts):
+            url = host + path
+            try:
+                if method == "GET":
+                    full = f"{url}?{query}" if query else url
+                    res = self._session.get(full, params=params, headers=_HEADERS,
+                                            timeout=self.timeout)
+                else:
+                    res = self._session.request(method, url, data=query,
+                                                headers=_HEADERS, timeout=self.timeout)
+                # 403/418/451 = bloccato da WAF/geo: prova l'host successivo
+                if res.status_code in (403, 418, 451) and i < len(self._hosts) - 1:
+                    last_exc = None
+                    try:
+                        self._handle(res)
+                    except AsterAPIError as e:
+                        last_exc = e
+                    continue
+                data = self._handle(res)
+                if i > 0:  # ricorda l'host che funziona
+                    self._hosts.insert(0, self._hosts.pop(i))
+                return data
+            except (requests.ConnectionError, requests.Timeout) as e:
+                last_exc = e
+                continue
+        if last_exc:
+            raise last_exc
+        raise AsterAPIError(0, None, "nessun host API raggiungibile")
+
     def _public(self, path: str, params: dict | None = None):
-        res = self._session.get(self.base_url + path, params=params or {},
-                                headers=_HEADERS, timeout=self.timeout)
-        return self._handle(res)
+        return self._request("GET", path, params=params or {})
 
     def _signed(self, method: str, path: str, params: dict | None = None):
-        body = self._sign(params or {})
-        url = self.base_url + path
         method = method.upper()
-        if method == "GET":
-            res = self._session.get(f"{url}?{body}", headers=_HEADERS, timeout=self.timeout)
-        elif method == "POST":
-            res = self._session.post(url, data=body, headers=_HEADERS, timeout=self.timeout)
-        elif method == "PUT":
-            res = self._session.put(url, data=body, headers=_HEADERS, timeout=self.timeout)
-        elif method == "DELETE":
-            res = self._session.delete(url, data=body, headers=_HEADERS, timeout=self.timeout)
-        else:
+        if method not in ("GET", "POST", "PUT", "DELETE"):
             raise ValueError(f"metodo non supportato: {method}")
-        return self._handle(res)
+        body = self._sign(params or {})
+        return self._request(method, path, query=body)
 
     # ----------------------------------------------------------- market data
 
