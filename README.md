@@ -62,6 +62,29 @@ Tutte le opzioni sono in [`.env.example`](.env.example): simbolo, timeframe,
 leva, parametri della strategia (EMA/RSI/ATR), limiti di rischio e modalità
 dry-run.
 
+## Esecuzione 24/7 su un server (es. AWS EC2)
+
+Collegati al server via SSH (PuTTY) e lancia:
+
+```bash
+curl -sL https://raw.githubusercontent.com/valentino500x/Telegram-Token-Bot/claude/aster-dex-trading-bot-7wg68p/deploy/setup.sh | bash
+```
+
+Lo script installa tutto, crea il servizio systemd `asterbot` (riavvio
+automatico in caso di crash e a ogni reboot) e ti dice come compilare il
+`.env`. Comandi utili:
+
+```bash
+nano ~/aster-bot/.env                 # configurazione
+sudo systemctl start asterbot         # avvia
+sudo systemctl stop asterbot          # ferma
+sudo systemctl status asterbot        # stato
+sudo journalctl -u asterbot -f        # log in diretta
+```
+
+⚠️ Un solo bot alla volta per account: se lo avvii sul server, ferma
+quello sul PC (CTRL+C), altrimenti aprirebbero ordini in doppio.
+
 ## ⚠️ Avvertenze
 
 - Il trading di perpetual futures con leva è **ad altissimo rischio**: puoi
