@@ -304,8 +304,6 @@ class TradingEngine:
                 f"⚠️ {symbol}: trade saltato, quantita' {qty_str} sotto i minimi del mercato "
                 f"(minQty {filters['minQty']}, minNotional {filters['minNotional']} USDT)")
             return
-        sl_str = self._round_step(sl, filters["tickSize"])
-        tp_str = self._round_step(tp, filters["tickSize"])
 
         try:
             order = await asyncio.to_thread(
@@ -319,6 +317,33 @@ class TradingEngine:
                                   f"{e.msg} (codice {e.code})")
                 return
             raise
+
+        # Ricalcola SL/TP dal prezzo di riempimento reale dell'ordine
+        entry = float(order.get("avgPrice") or 0) or sig.price
+        if sig.direction == "LONG":
+            sl, tp = entry - stop_distance, entry + tp_distance
+        else:
+            sl, tp = entry + stop_distance, entry - tp_distance
+        sl_str = self._round_step(sl, filters["tickSize"])
+        tp_str = self._round_step(tp, filters["tickSize"])
+
+        # Se nel frattempo il mark price ha gia' superato SL o TP, chiudi subito
+        # invece di piazzare ordini che scatterebbero all'istante
+        try:
+            mark_data = await asyncio.to_thread(self.client.mark_price, symbol)
+            mark = float((mark_data[0] if isinstance(mark_data, list) else mark_data)
+                         .get("markPrice", 0) or 0)
+        except (AsterAPIError, AttributeError, IndexError):
+            mark = 0.0
+        if mark:
+            long_dir = sig.direction == "LONG"
+            if (mark <= sl) if long_dir else (mark >= sl):
+                await self.close_position(symbol, "stop superato prima della protezione")
+                return
+            if (mark >= tp) if long_dir else (mark <= tp):
+                await self.close_position(symbol, "target raggiunto all'istante")
+                return
+
         try:
             await asyncio.to_thread(
                 self.client.stop_market_close, symbol, exit_side, sl_str)
@@ -332,7 +357,7 @@ class TradingEngine:
             return
 
         await self.notify(
-            f"✅ Aperto {sig.direction} {qty_str} {symbol} @ ~{sig.price:.6g} "
+            f"✅ Aperto {sig.direction} {qty_str} {symbol} @ ~{entry:.6g} "
             f"(ordine {order.get('orderId')})\n🛑 SL {sl_str} | 🎯 TP {tp_str} | RSI {sig.rsi:.1f}")
 
     async def close_position(self, symbol: str, reason: str = "richiesta manuale",
