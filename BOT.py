@@ -68,8 +68,8 @@ async def cmd_start(update: Update, _):
         f"Mercati: `{', '.join(cfg.symbols)}`\n"
         f"Timeframe: `{cfg.interval}` | Leva: `{cfg.leverage}x` | "
         f"Max posizioni: `{cfg.max_open_positions}`\n"
-        f"Strategia: EMA {cfg.ema_fast}/{cfg.ema_slow} + RSI {cfg.rsi_period}, "
-        f"SL {cfg.stop_loss_atr}×ATR, TP {cfg.take_profit_atr}×ATR\n\n"
+        f"Strategia: `{cfg.strategy}` | SL {cfg.stop_loss_atr}×ATR, TP {cfg.take_profit_atr}×ATR\n"
+        f"Commissioni simulate: {cfg.fee_pct}%/lato + slippage {cfg.slippage_pct}%\n\n"
         "Usa /run per avviare il trading automatico e /help per tutti i comandi.",
         parse_mode=ParseMode.MARKDOWN)
 
@@ -114,7 +114,7 @@ async def cmd_stop(update: Update, _):
 async def cmd_status(update: Update, _):
     lines = [
         f"🤖 Trading: {'🟢 ATTIVO' if engine.running else '🔴 FERMO'}",
-        f"Modalita': {'🧪 simulazione' if cfg.dry_run else '💸 ordini reali'}",
+        f"Modalita': {'🧪 simulazione' if cfg.dry_run else '💸 ordini reali'} | Strategia: {cfg.strategy}",
         f"TF: {cfg.interval} | Leva: {cfg.leverage}x | Rischio: {cfg.risk_per_trade_pct}%/trade",
         f"Max posizioni: {cfg.max_open_positions} | Max nozionale: {cfg.max_position_usdt} USDT",
         "",
@@ -142,8 +142,10 @@ async def cmd_balance(update: Update, _):
     if cfg.dry_run:
         bal = await engine.available_balance()
         await update.message.reply_text(
-            f"🧪 Saldo simulato: {bal:.2f} USDT "
-            f"(PnL simulato totale: {engine.paper_realized_pnl:+.2f} USDT)")
+            f"🧪 Saldo simulato: {bal:.2f} USDT\n"
+            f"PnL netto totale: {engine.paper_realized_pnl:+.2f} USDT "
+            f"su {engine.paper_trades_closed} trade chiusi\n"
+            f"di cui commissioni+slippage pagati: {engine.paper_fees_total:.2f} USDT")
         return
     rows = await asyncio.to_thread(client.balance)
     lines = ["💰 Saldo futures:"]
@@ -194,7 +196,9 @@ async def cmd_price(update: Update, _):
 async def cmd_pnl(update: Update, _):
     if cfg.dry_run:
         await update.message.reply_text(
-            f"🧪 PnL simulato totale: {engine.paper_realized_pnl:+.2f} USDT")
+            f"🧪 PnL netto simulato: {engine.paper_realized_pnl:+.2f} USDT "
+            f"({engine.paper_trades_closed} trade chiusi)\n"
+            f"Commissioni simulate pagate: {engine.paper_fees_total:.2f} USDT")
         return
     midnight = int(time.time() // 86400 * 86400 * 1000)
     rows = await asyncio.to_thread(client.income, None, midnight)

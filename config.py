@@ -68,13 +68,28 @@ class Settings:
     # Perdita massima giornaliera (percentuale del saldo): oltre questa soglia il bot si ferma
     max_daily_loss_pct: float = field(default_factory=lambda: _float("MAX_DAILY_LOSS_PCT", 5.0))
 
-    # --- Strategia (EMA crossover + filtro RSI) ---
+    # --- Strategia ---
+    # ema_cross     = incrocio EMA + filtro RSI (segue il trend, pochi trade)
+    # rsi_reversion = RSI ipervenduto/ipercomprato (mean reversion, molti trade)
+    # breakout      = rottura del canale di Donchian (segue gli strappi)
+    strategy: str = field(default_factory=lambda: os.getenv("STRATEGY", "ema_cross").strip().lower())
     ema_fast: int = field(default_factory=lambda: _int("EMA_FAST", 9))
     ema_slow: int = field(default_factory=lambda: _int("EMA_SLOW", 21))
     rsi_period: int = field(default_factory=lambda: _int("RSI_PERIOD", 14))
     rsi_long_max: float = field(default_factory=lambda: _float("RSI_LONG_MAX", 70.0))
     rsi_short_min: float = field(default_factory=lambda: _float("RSI_SHORT_MIN", 30.0))
+    # soglie per la strategia rsi_reversion
+    rsi_buy_below: float = field(default_factory=lambda: _float("RSI_BUY_BELOW", 30.0))
+    rsi_sell_above: float = field(default_factory=lambda: _float("RSI_SELL_ABOVE", 70.0))
+    # periodo del canale per la strategia breakout
+    donchian_period: int = field(default_factory=lambda: _int("DONCHIAN_PERIOD", 20))
     atr_period: int = field(default_factory=lambda: _int("ATR_PERIOD", 14))
+
+    # --- Commissioni e slippage (usati nella simulazione) ---
+    # Taker fee di Aster: 0.035% per lato (apertura E chiusura)
+    fee_pct: float = field(default_factory=lambda: _float("FEE_TAKER_PCT", 0.035))
+    # Scivolamento di prezzo stimato per gli ordini a mercato, per lato
+    slippage_pct: float = field(default_factory=lambda: _float("SLIPPAGE_PCT", 0.01))
 
     # --- Sicurezza ---
     # In modalita' DRY_RUN il bot simula i trade senza inviare ordini reali (default: attiva)
@@ -93,4 +108,7 @@ class Settings:
                 problems.append("ASTER_SIGNER_ADDRESS / ASTER_PRIVATE_KEY mancanti (necessari con DRY_RUN=false)")
         if self.ema_fast >= self.ema_slow:
             problems.append("EMA_FAST deve essere minore di EMA_SLOW")
+        if self.strategy not in ("ema_cross", "rsi_reversion", "breakout"):
+            problems.append(f"STRATEGY '{self.strategy}' non valida "
+                            "(usa ema_cross, rsi_reversion o breakout)")
         return problems

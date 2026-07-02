@@ -1,10 +1,14 @@
-"""Strategia di trading: incrocio di EMA con filtro RSI e ATR per gli stop.
+"""Strategie di trading (tutte simmetriche: aprono sia LONG che SHORT).
 
-- Segnale LONG:  la EMA veloce incrocia al rialzo la EMA lenta e l'RSI non e' in ipercomprato.
-- Segnale SHORT: la EMA veloce incrocia al ribasso la EMA lenta e l'RSI non e' in ipervenduto.
+- ema_cross:     incrocio EMA veloce/lenta con filtro RSI. Segue il trend,
+                 genera pochi segnali ma di qualita'.
+- rsi_reversion: mean reversion sull'RSI. LONG quando l'RSI e' in ipervenduto,
+                 SHORT quando e' in ipercomprato. Molti segnali (scalping).
+- breakout:      rottura del canale di Donchian. LONG se il prezzo supera il
+                 massimo delle ultime N candele, SHORT se buca il minimo.
 
-Gli indicatori sono calcolati in puro Python sulle candele chiuse
-(l'ultima candela, ancora in corso, viene scartata).
+Gli stop (SL/TP) sono sempre basati sull'ATR. Gli indicatori sono calcolati
+in puro Python sulle candele chiuse (l'ultima, ancora in corso, e' scartata).
 """
 
 from dataclasses import dataclass
@@ -89,32 +93,45 @@ def atr(candles: list[Candle], period: int) -> float:
     return value
 
 
-def evaluate(candles: list[Candle], ema_fast_p: int, ema_slow_p: int,
-             rsi_p: int, rsi_long_max: float, rsi_short_min: float,
-             atr_p: int) -> Signal | None:
-    """Valuta le candele chiuse e ritorna lo stato corrente della strategia."""
+def evaluate(candles: list[Candle], cfg) -> Signal | None:
+    """Valuta le candele chiuse secondo la strategia scelta in cfg.strategy."""
     closes = [c.close for c in candles]
-    if len(closes) < ema_slow_p + 2:
+    needed = max(cfg.ema_slow + 2, cfg.rsi_period + 2,
+                 cfg.donchian_period + 2, cfg.atr_period + 2)
+    if len(closes) < needed:
         return None
 
-    fast = ema(closes, ema_fast_p)
-    slow = ema(closes, ema_slow_p)
-    # allinea le due serie sulla coda
-    n = min(len(fast), len(slow))
+    fast = ema(closes, cfg.ema_fast)
+    slow = ema(closes, cfg.ema_slow)
+    n = min(len(fast), len(slow))  # allinea le due serie sulla coda
     if n < 2:
         return None
     fast, slow = fast[-n:], slow[-n:]
 
-    cur_rsi = rsi(closes[-(rsi_p * 5):], rsi_p)
-    cur_atr = atr(candles[-(atr_p * 5):], atr_p)
+    cur_rsi = rsi(closes[-(cfg.rsi_period * 5):], cfg.rsi_period)
+    cur_atr = atr(candles[-(cfg.atr_period * 5):], cfg.atr_period)
 
     direction = None
-    crossed_up = fast[-2] <= slow[-2] and fast[-1] > slow[-1]
-    crossed_down = fast[-2] >= slow[-2] and fast[-1] < slow[-1]
-    if crossed_up and cur_rsi < rsi_long_max:
-        direction = "LONG"
-    elif crossed_down and cur_rsi > rsi_short_min:
-        direction = "SHORT"
+    if cfg.strategy == "ema_cross":
+        crossed_up = fast[-2] <= slow[-2] and fast[-1] > slow[-1]
+        crossed_down = fast[-2] >= slow[-2] and fast[-1] < slow[-1]
+        if crossed_up and cur_rsi < cfg.rsi_long_max:
+            direction = "LONG"
+        elif crossed_down and cur_rsi > cfg.rsi_short_min:
+            direction = "SHORT"
+    elif cfg.strategy == "rsi_reversion":
+        if cur_rsi <= cfg.rsi_buy_below:
+            direction = "LONG"
+        elif cur_rsi >= cfg.rsi_sell_above:
+            direction = "SHORT"
+    elif cfg.strategy == "breakout":
+        window = candles[-(cfg.donchian_period + 1):-1]
+        highest = max(c.high for c in window)
+        lowest = min(c.low for c in window)
+        if closes[-1] > highest:
+            direction = "LONG"
+        elif closes[-1] < lowest:
+            direction = "SHORT"
 
     return Signal(direction=direction, price=closes[-1], atr=cur_atr,
                   ema_fast=fast[-1], ema_slow=slow[-1], rsi=cur_rsi,

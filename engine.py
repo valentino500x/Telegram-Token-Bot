@@ -32,6 +32,7 @@ class PaperPosition:
     stop_loss: float
     take_profit: float
     opened_at: float
+    entry_fee: float = 0.0
 
 
 @dataclass
@@ -52,7 +53,9 @@ class TradingEngine:
         self._task: asyncio.Task | None = None
         self._halted_reason: str | None = None
         self.states: dict[str, SymbolState] = {}
-        self.paper_realized_pnl = 0.0
+        self.paper_realized_pnl = 0.0  # PnL netto (commissioni e slippage inclusi)
+        self.paper_fees_total = 0.0
+        self.paper_trades_closed = 0
         self._last_error_msg: str | None = None
         self._last_error_time = 0.0
 
@@ -125,10 +128,7 @@ class TradingEngine:
             self.client.klines, symbol, self.cfg.interval,
             max(self.cfg.ema_slow * 4, 120))
         candles = strategy.parse_klines(raw)
-        sig = strategy.evaluate(
-            candles, self.cfg.ema_fast, self.cfg.ema_slow,
-            self.cfg.rsi_period, self.cfg.rsi_long_max, self.cfg.rsi_short_min,
-            self.cfg.atr_period)
+        sig = strategy.evaluate(candles, self.cfg)
         if sig is None:
             return
         state.last_signal = sig
@@ -171,8 +171,9 @@ class TradingEngine:
             p = state.paper
             price = state.last_signal.price if state.last_signal else p.entry
             sign = 1 if p.direction == "LONG" else -1
+            pnl = (price - p.entry) * sign * p.qty - p.entry_fee
             return {"symbol": symbol, "direction": p.direction, "qty": p.qty,
-                    "entry": p.entry, "pnl": (price - p.entry) * sign * p.qty}
+                    "entry": p.entry, "pnl": pnl}
         rows = await asyncio.to_thread(self.client.position_risk, symbol)
         for row in rows if isinstance(rows, list) else [rows]:
             amt = float(row.get("positionAmt", 0) or 0)
@@ -234,10 +235,16 @@ class TradingEngine:
         if self.cfg.dry_run:
             if qty * sig.price < 5:
                 return
-            state.paper = PaperPosition(sig.direction, qty, sig.price, sl, tp, time.time())
+            # entrata peggiorata dallo slippage + commissione taker di apertura
+            slip = self.cfg.slippage_pct / 100.0
+            entry = sig.price * (1 + slip) if sig.direction == "LONG" else sig.price * (1 - slip)
+            entry_fee = qty * entry * self.cfg.fee_pct / 100.0
+            state.paper = PaperPosition(sig.direction, qty, entry, sl, tp,
+                                        time.time(), entry_fee)
             await self.notify(
                 f"📄 [SIMULAZIONE] Aperto {sig.direction} {qty:.6g} {symbol} "
-                f"@ ~{sig.price:.6g}\n🛑 SL {sl:.6g} | 🎯 TP {tp:.6g} | RSI {sig.rsi:.1f}")
+                f"@ ~{entry:.6g} (fee {entry_fee:.4f} USDT)\n"
+                f"🛑 SL {sl:.6g} | 🎯 TP {tp:.6g} | RSI {sig.rsi:.1f}")
             return
 
         filters = await asyncio.to_thread(self._symbol_filters, symbol)
@@ -268,17 +275,30 @@ class TradingEngine:
             f"✅ Aperto {sig.direction} {qty_str} {symbol} @ ~{sig.price:.6g} "
             f"(ordine {order.get('orderId')})\n🛑 SL {sl_str} | 🎯 TP {tp_str} | RSI {sig.rsi:.1f}")
 
-    async def close_position(self, symbol: str, reason: str = "richiesta manuale") -> bool:
+    async def close_position(self, symbol: str, reason: str = "richiesta manuale",
+                             exit_price: float | None = None) -> bool:
         state = self._state(symbol)
         position = await self.current_position(symbol)
         if self.cfg.dry_run:
             if not state.paper:
                 return False
-            pnl = position["pnl"] if position else 0.0
-            self.paper_realized_pnl += pnl
+            p = state.paper
+            if exit_price is None:
+                exit_price = state.last_signal.price if state.last_signal else p.entry
+            # uscita peggiorata dallo slippage + commissione taker di chiusura
+            slip = self.cfg.slippage_pct / 100.0
+            exit_fill = exit_price * (1 - slip) if p.direction == "LONG" else exit_price * (1 + slip)
+            sign = 1 if p.direction == "LONG" else -1
+            gross = (exit_fill - p.entry) * sign * p.qty
+            exit_fee = p.qty * exit_fill * self.cfg.fee_pct / 100.0
+            fees = p.entry_fee + exit_fee
+            net = gross - fees
+            self.paper_realized_pnl += net
+            self.paper_fees_total += fees
+            self.paper_trades_closed += 1
             await self.notify(
-                f"📄 [SIMULAZIONE] Chiuso {state.paper.direction} {state.paper.qty:.6g} "
-                f"{symbol} ({reason}) — PnL {pnl:+.2f} USDT")
+                f"📄 [SIMULAZIONE] Chiuso {p.direction} {p.qty:.6g} {symbol} ({reason})\n"
+                f"PnL netto {net:+.2f} USDT (lordo {gross:+.2f}, commissioni {fees:.4f})")
             state.paper = None
             return True
         if not position:
@@ -307,19 +327,19 @@ class TradingEngine:
         if not state.paper:
             return
         p = state.paper
-        hit = None
+        hit, fill = None, None
         if p.direction == "LONG":
             if price <= p.stop_loss:
-                hit = "stop-loss"
+                hit, fill = "stop-loss", p.stop_loss
             elif price >= p.take_profit:
-                hit = "take-profit"
+                hit, fill = "take-profit", p.take_profit
         else:
             if price >= p.stop_loss:
-                hit = "stop-loss"
+                hit, fill = "stop-loss", p.stop_loss
             elif price <= p.take_profit:
-                hit = "take-profit"
+                hit, fill = "take-profit", p.take_profit
         if hit:
-            await self.close_position(symbol, hit)
+            await self.close_position(symbol, hit, exit_price=fill)
 
     # ------------------------------------------------------------------ risk
 
