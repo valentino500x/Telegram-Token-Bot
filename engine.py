@@ -69,11 +69,49 @@ class TradingEngine:
     async def start(self):
         if self.running:
             return
+        await self.ensure_symbols()
         if not self.cfg.dry_run:
             await asyncio.to_thread(self._setup_symbols)
         self._halted_reason = None
         self.running = True
         self._task = asyncio.create_task(self._loop())
+
+    async def ensure_symbols(self) -> list:
+        """Se SYMBOLS=AUTO, sceglie i perpetual USDT piu' scambiati nelle 24h."""
+        if not self.cfg.symbols or not self.cfg.symbols[0].upper().startswith("AUTO"):
+            return self.cfg.symbols
+        first = self.cfg.symbols[0].upper()
+        count = self.cfg.auto_symbols_count
+        if ":" in first:
+            try:
+                count = max(1, int(first.split(":", 1)[1]))
+            except ValueError:
+                pass
+        symbols = await asyncio.to_thread(self._discover_symbols, count)
+        self.cfg.symbols = symbols
+        await self.notify(
+            f"🔎 Selezionati automaticamente i {len(symbols)} perpetual "
+            f"piu' scambiati (24h):\n{', '.join(symbols)}")
+        return symbols
+
+    def _discover_symbols(self, count: int) -> list:
+        info = self.client.exchange_info()
+        tradable = set()
+        for s in info.get("symbols", []):
+            if (s.get("status") == "TRADING"
+                    and s.get("quoteAsset") == "USDT"
+                    and s.get("contractType", "PERPETUAL") == "PERPETUAL"):
+                tradable.add(s["symbol"])
+        tickers = self.client.ticker_24hr()
+        volumes = {}
+        for t in tickers if isinstance(tickers, list) else [tickers]:
+            sym = t.get("symbol")
+            if sym in tradable:
+                volumes[sym] = float(t.get("quoteVolume", 0) or 0)
+        top = sorted(volumes, key=volumes.get, reverse=True)[:count]
+        if not top:
+            raise AsterAPIError(0, None, "nessun mercato trovato per la selezione automatica")
+        return top
 
     async def stop(self):
         self.running = False

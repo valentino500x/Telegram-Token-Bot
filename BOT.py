@@ -96,8 +96,8 @@ async def cmd_run(update: Update, _):
     if engine.running:
         await update.message.reply_text("Il trading è già attivo. Usa /status.")
         return
+    await update.message.reply_text("▶️ Avvio il trading automatico...")
     await engine.start()
-    await update.message.reply_text("▶️ Trading automatico avviato.")
 
 
 @admin_only
@@ -186,6 +186,7 @@ async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def cmd_price(update: Update, _):
+    await engine.ensure_symbols()
     lines = []
     for symbol in cfg.symbols:
         price = await asyncio.to_thread(client.ticker_price, symbol)
@@ -214,7 +215,8 @@ async def cmd_symbols(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             f"Mercati attuali: {', '.join(cfg.symbols)}\n"
-            "Uso: /symbols BTCUSDT,ETHUSDT,SOLUSDT")
+            "Uso: /symbols BTCUSDT,ETHUSDT,SOLUSDT — oppure /symbols AUTO "
+            "(o AUTO:30) per i più scambiati")
         return
     if engine.running or await engine.all_positions():
         await update.message.reply_text(
@@ -227,7 +229,10 @@ async def cmd_symbols(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     cfg.symbols = symbols
     engine.reset_symbol_cache()
-    await update.message.reply_text(f"✅ Mercati impostati: {', '.join(cfg.symbols)}")
+    if symbols[0].startswith("AUTO"):
+        await engine.ensure_symbols()  # risolve subito e notifica la lista
+    else:
+        await update.message.reply_text(f"✅ Mercati impostati: {', '.join(cfg.symbols)}")
 
 
 @admin_only

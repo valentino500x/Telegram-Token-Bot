@@ -48,8 +48,11 @@ class Settings:
     aster_private_key: str = field(default_factory=lambda: os.getenv("ASTER_PRIVATE_KEY", ""))
 
     # --- Trading ---
-    # Lista dei mercati seguiti (SYMBOLS separati da virgola; SYMBOL resta valido)
+    # Lista dei mercati seguiti (SYMBOLS separati da virgola; SYMBOL resta valido).
+    # SYMBOLS=AUTO seleziona da sola i perpetual piu' scambiati nelle 24h.
     symbols: list = field(default_factory=lambda: _symbols())
+    # Quanti mercati seguire con SYMBOLS=AUTO (si puo' anche scrivere AUTO:30)
+    auto_symbols_count: int = field(default_factory=lambda: _int("AUTO_SYMBOLS_COUNT", 20))
     interval: str = field(default_factory=lambda: os.getenv("INTERVAL", "3m"))
     leverage: int = field(default_factory=lambda: _int("LEVERAGE", 3))
     # Numero massimo di posizioni aperte contemporaneamente

@@ -186,6 +186,11 @@ class AsterClient:
         data = self._public("/fapi/v3/ticker/price", {"symbol": symbol})
         return float(data["price"])
 
+    def ticker_24hr(self, symbol: str | None = None):
+        """Statistiche 24h; senza symbol le ritorna per tutti i mercati."""
+        return self._public("/fapi/v3/ticker/24hr",
+                            {"symbol": symbol} if symbol else {})
+
     def mark_price(self, symbol: str):
         return self._public("/fapi/v3/premiumIndex", {"symbol": symbol})
 

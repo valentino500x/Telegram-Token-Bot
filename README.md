@@ -52,7 +52,7 @@ Su Telegram: `/start` per la panoramica, `/run` per avviare il trading.
 | `/balance` | saldo del conto futures |
 | `/price` | prezzi correnti di tutti i mercati |
 | `/pnl` | PnL realizzato oggi |
-| `/symbols BTCUSDT,ETHUSDT` | imposta i mercati seguiti |
+| `/symbols BTCUSDT,ETHUSDT` | imposta i mercati seguiti (`/symbols AUTO` per i più scambiati) |
 | `/leverage 5` | cambia leva (1–50) |
 | `/risk 0.5` | rischio per trade in % |
 
