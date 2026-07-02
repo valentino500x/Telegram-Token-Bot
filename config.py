@@ -28,6 +28,11 @@ def _int(name: str, default: int) -> int:
     return int(raw) if raw else default
 
 
+def _symbols() -> list:
+    raw = os.getenv("SYMBOLS") or os.getenv("SYMBOL") or "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,ASTERUSDT"
+    return [s.strip().upper() for s in raw.replace(" ", ",").split(",") if s.strip()]
+
+
 @dataclass
 class Settings:
     # --- Telegram ---
@@ -43,9 +48,12 @@ class Settings:
     aster_private_key: str = field(default_factory=lambda: os.getenv("ASTER_PRIVATE_KEY", ""))
 
     # --- Trading ---
-    symbol: str = field(default_factory=lambda: os.getenv("SYMBOL", "BTCUSDT"))
-    interval: str = field(default_factory=lambda: os.getenv("INTERVAL", "5m"))
+    # Lista dei mercati seguiti (SYMBOLS separati da virgola; SYMBOL resta valido)
+    symbols: list = field(default_factory=lambda: _symbols())
+    interval: str = field(default_factory=lambda: os.getenv("INTERVAL", "3m"))
     leverage: int = field(default_factory=lambda: _int("LEVERAGE", 3))
+    # Numero massimo di posizioni aperte contemporaneamente
+    max_open_positions: int = field(default_factory=lambda: _int("MAX_OPEN_POSITIONS", 3))
     margin_type: str = field(default_factory=lambda: os.getenv("MARGIN_TYPE", "CROSSED"))
     loop_seconds: int = field(default_factory=lambda: _int("LOOP_SECONDS", 30))
 

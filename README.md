@@ -5,6 +5,9 @@ Bot Telegram che fa trading automatico sui **perpetual futures di Aster DEX**
 
 ## Come funziona
 
+- **Multi-mercato**: segue più perpetual in parallelo (default: BTC, ETH,
+  SOL, BNB, ASTER) con una posizione per mercato e un limite di posizioni
+  contemporanee.
 - **Strategia**: incrocio di medie mobili esponenziali (EMA 9/21) con filtro
   RSI. Segnale LONG quando la EMA veloce incrocia al rialzo la lenta,
   SHORT quando incrocia al ribasso.
@@ -43,13 +46,13 @@ Su Telegram: `/start` per la panoramica, `/run` per avviare il trading.
 | Comando | Descrizione |
 | --- | --- |
 | `/run` / `/stop` | avvia / ferma il trading automatico |
-| `/status` | stato, ultimo segnale e posizione |
-| `/position` | dettagli della posizione aperta |
-| `/close` | chiude la posizione e cancella gli ordini |
+| `/status` | stato, segnali e posizioni di tutti i mercati |
+| `/position` | dettagli delle posizioni aperte |
+| `/close` | chiude tutte le posizioni (`/close ETHUSDT` per una sola) |
 | `/balance` | saldo del conto futures |
-| `/price` | prezzo corrente del simbolo |
+| `/price` | prezzi correnti di tutti i mercati |
 | `/pnl` | PnL realizzato oggi |
-| `/symbol ETHUSDT` | cambia simbolo |
+| `/symbols BTCUSDT,ETHUSDT` | imposta i mercati seguiti |
 | `/leverage 5` | cambia leva (1–50) |
 | `/risk 0.5` | rischio per trade in % |
 

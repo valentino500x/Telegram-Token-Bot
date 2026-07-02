@@ -65,7 +65,9 @@ async def cmd_start(update: Update, _):
     await update.message.reply_text(
         "👋 *Aster DEX Perpetual Trading Bot*\n\n"
         f"Modalita': {mode}\n"
-        f"Simbolo: `{cfg.symbol}` | Timeframe: `{cfg.interval}` | Leva: `{cfg.leverage}x`\n"
+        f"Mercati: `{', '.join(cfg.symbols)}`\n"
+        f"Timeframe: `{cfg.interval}` | Leva: `{cfg.leverage}x` | "
+        f"Max posizioni: `{cfg.max_open_positions}`\n"
         f"Strategia: EMA {cfg.ema_fast}/{cfg.ema_slow} + RSI {cfg.rsi_period}, "
         f"SL {cfg.stop_loss_atr}×ATR, TP {cfg.take_profit_atr}×ATR\n\n"
         "Usa /run per avviare il trading automatico e /help per tutti i comandi.",
@@ -78,12 +80,12 @@ async def cmd_help(update: Update, _):
         "/run — avvia il trading automatico\n"
         "/stop — ferma il trading automatico\n"
         "/status — stato e ultimo segnale\n"
-        "/position — posizione aperta\n"
-        "/close — chiude posizione e ordini\n"
+        "/position — posizioni aperte\n"
+        "/close — chiude TUTTE le posizioni (o /close ETHUSDT per una sola)\n"
         "/balance — saldo futures\n"
-        "/price — prezzo corrente\n"
+        "/price — prezzi correnti\n"
         "/pnl — PnL realizzato oggi\n"
-        "/symbol SIMBOLO — cambia simbolo\n"
+        "/symbols BTCUSDT,ETHUSDT — imposta i mercati seguiti\n"
         "/leverage N — cambia leva\n"
         "/risk PCT — rischio per trade in %")
 
@@ -110,21 +112,26 @@ async def cmd_stop(update: Update, _):
 
 @admin_only
 async def cmd_status(update: Update, _):
-    sig = engine.last_signal
     lines = [
         f"🤖 Trading: {'🟢 ATTIVO' if engine.running else '🔴 FERMO'}",
         f"Modalita': {'🧪 simulazione' if cfg.dry_run else '💸 ordini reali'}",
-        f"Simbolo: {cfg.symbol} | TF: {cfg.interval} | Leva: {cfg.leverage}x",
-        f"Rischio: {cfg.risk_per_trade_pct}%/trade | Max posizione: {cfg.max_position_usdt} USDT",
+        f"TF: {cfg.interval} | Leva: {cfg.leverage}x | Rischio: {cfg.risk_per_trade_pct}%/trade",
+        f"Max posizioni: {cfg.max_open_positions} | Max nozionale: {cfg.max_position_usdt} USDT",
+        "",
     ]
-    if sig:
-        lines.append(
-            f"\nUltimo check — prezzo {sig.price:.6g}, EMA{cfg.ema_fast} {sig.ema_fast:.6g}, "
-            f"EMA{cfg.ema_slow} {sig.ema_slow:.6g}, RSI {sig.rsi:.1f}, ATR {sig.atr:.6g}")
-    pos = await engine.current_position()
-    if pos:
-        lines.append(f"\n📌 Posizione: {pos['direction']} {pos['qty']:.6g} "
-                     f"@ {pos['entry']:.6g} (PnL {pos['pnl']:+.2f} USDT)")
+    for symbol in cfg.symbols:
+        sig = engine.states[symbol].last_signal if symbol in engine.states else None
+        if sig:
+            trend = "📈" if sig.ema_fast > sig.ema_slow else "📉"
+            lines.append(f"{trend} {symbol}: {sig.price:.6g} | RSI {sig.rsi:.1f}")
+        else:
+            lines.append(f"⏳ {symbol}: in attesa dei primi dati")
+    positions = await engine.all_positions()
+    if positions:
+        lines.append("")
+        for pos in positions:
+            lines.append(f"📌 {pos['symbol']}: {pos['direction']} {pos['qty']:.6g} "
+                         f"@ {pos['entry']:.6g} (PnL {pos['pnl']:+.2f} USDT)")
     else:
         lines.append("\n📌 Nessuna posizione aperta")
     await update.message.reply_text("\n".join(lines))
@@ -150,26 +157,37 @@ async def cmd_balance(update: Update, _):
 
 @admin_only
 async def cmd_position(update: Update, _):
-    pos = await engine.current_position()
-    if not pos:
+    positions = await engine.all_positions()
+    if not positions:
         await update.message.reply_text("Nessuna posizione aperta.")
         return
-    await update.message.reply_text(
-        f"📌 {pos['direction']} {pos['qty']:.6g} {cfg.symbol}\n"
-        f"Entrata: {pos['entry']:.6g}\nPnL: {pos['pnl']:+.2f} USDT")
+    lines = []
+    for pos in positions:
+        lines.append(f"📌 {pos['symbol']}: {pos['direction']} {pos['qty']:.6g}\n"
+                     f"   Entrata: {pos['entry']:.6g} | PnL: {pos['pnl']:+.2f} USDT")
+    await update.message.reply_text("\n".join(lines))
 
 
 @admin_only
-async def cmd_close(update: Update, _):
-    closed = await engine.close_position("comando /close")
+async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.args:
+        symbol = context.args[0].upper()
+        closed = await engine.close_position(symbol, "comando /close")
+        if not closed:
+            await update.message.reply_text(f"Nessuna posizione aperta su {symbol}.")
+        return
+    closed = await engine.close_all_positions("comando /close")
     if not closed:
         await update.message.reply_text("Nessuna posizione da chiudere.")
 
 
 @admin_only
 async def cmd_price(update: Update, _):
-    price = await asyncio.to_thread(client.ticker_price, cfg.symbol)
-    await update.message.reply_text(f"💵 {cfg.symbol}: {price:.6g} USDT")
+    lines = []
+    for symbol in cfg.symbols:
+        price = await asyncio.to_thread(client.ticker_price, symbol)
+        lines.append(f"💵 {symbol}: {price:.6g} USDT")
+    await update.message.reply_text("\n".join(lines))
 
 
 @admin_only
@@ -187,17 +205,24 @@ async def cmd_pnl(update: Update, _):
 
 
 @admin_only
-async def cmd_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_symbols(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text(f"Simbolo attuale: {cfg.symbol}\nUso: /symbol ETHUSDT")
-        return
-    if engine.running or await engine.current_position():
         await update.message.reply_text(
-            "Ferma il trading (/stop) e chiudi la posizione (/close) prima di cambiare simbolo.")
+            f"Mercati attuali: {', '.join(cfg.symbols)}\n"
+            "Uso: /symbols BTCUSDT,ETHUSDT,SOLUSDT")
         return
-    cfg.symbol = context.args[0].upper()
+    if engine.running or await engine.all_positions():
+        await update.message.reply_text(
+            "Ferma il trading (/stop) e chiudi le posizioni (/close) prima di cambiare i mercati.")
+        return
+    raw = " ".join(context.args).replace(" ", ",")
+    symbols = [s.strip().upper() for s in raw.split(",") if s.strip()]
+    if not symbols:
+        await update.message.reply_text("Nessun simbolo valido.")
+        return
+    cfg.symbols = symbols
     engine.reset_symbol_cache()
-    await update.message.reply_text(f"✅ Simbolo impostato su {cfg.symbol}")
+    await update.message.reply_text(f"✅ Mercati impostati: {', '.join(cfg.symbols)}")
 
 
 @admin_only
@@ -211,8 +236,8 @@ async def cmd_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     cfg.leverage = lev
     if not cfg.dry_run:
-        import asyncio
-        await asyncio.to_thread(client.set_leverage, cfg.symbol, lev)
+        for symbol in cfg.symbols:
+            await asyncio.to_thread(client.set_leverage, symbol, lev)
     await update.message.reply_text(f"✅ Leva impostata a {lev}x")
 
 
@@ -258,13 +283,13 @@ def main():
         ("start", cmd_start), ("help", cmd_help), ("run", cmd_run),
         ("stop", cmd_stop), ("status", cmd_status), ("balance", cmd_balance),
         ("position", cmd_position), ("close", cmd_close), ("price", cmd_price),
-        ("pnl", cmd_pnl), ("symbol", cmd_symbol), ("leverage", cmd_leverage),
-        ("risk", cmd_risk),
+        ("pnl", cmd_pnl), ("symbols", cmd_symbols), ("symbol", cmd_symbols),
+        ("leverage", cmd_leverage), ("risk", cmd_risk),
     ]:
         app.add_handler(CommandHandler(name, handler))
 
     mode = "SIMULAZIONE (dry-run)" if cfg.dry_run else "ORDINI REALI"
-    log.info("Bot avviato — %s su %s %s", mode, cfg.symbol, cfg.interval)
+    log.info("Bot avviato — %s su %s %s", mode, ",".join(cfg.symbols), cfg.interval)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
