@@ -23,6 +23,7 @@ import time
 
 from telegram import Update
 from telegram.constants import ParseMode
+from telegram.error import TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from aster_client import AsterClient, AsterAPIError
@@ -272,13 +273,22 @@ def main():
     app = Application.builder().token(cfg.telegram_token).build()
 
     async def notify(text: str):
-        if cfg.admin_id:
+        if not cfg.admin_id:
+            log.info("NOTIFICA: %s", text)
+            return
+        for attempt in range(3):
             try:
                 await app.bot.send_message(chat_id=cfg.admin_id, text=text)
+                return
+            except TelegramError as e:
+                if attempt == 2:
+                    log.warning("Notifica Telegram persa dopo 3 tentativi (%s): %.60s",
+                                e, text)
+                else:
+                    await asyncio.sleep(2 * (attempt + 1))
             except Exception:
                 log.exception("invio notifica fallito")
-        else:
-            log.info("NOTIFICA: %s", text)
+                return
 
     global engine
     engine = TradingEngine(cfg, client, notify)
